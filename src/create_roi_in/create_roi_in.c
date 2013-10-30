@@ -201,7 +201,7 @@ int main(int argc, char *argv[])
 
   asfSplashScreen(argc, argv);
 
-  if (argc < 2 || argc > 9) { give_usage(argv,argc); exit(1); }
+  if (argc < 2 || argc > 10) { give_usage(argv,argc); exit(1); }
   
   opterr = 0;
   start_line = 1;
@@ -259,6 +259,7 @@ int main(int argc, char *argv[])
         printf("Unknown option %s\n",optarg);
 	return(1);
       default:
+        printf("Unknown option %s\n",optarg);
         give_usage(argv,argc);
 	exit(1);
     } 
@@ -904,21 +905,21 @@ int main(int argc, char *argv[])
   fprintf(fprsc,rscfmt_int,"FIRST_CENTER_MN_OF_HOUR",s_time.min);
   fprintf(fprsc,rscfmt_int,"FIRST_CENTER_S_OF_MN",sec);
   fprintf(fprsc,rscfmt_int,"FIRST_CENTER_MS_OF_S",msec);
-  fprintf(fprsc,rscfmt_int,"SAT_TIME_CODE",0); // no idea here!
-  fprintf(fprsc,rscfmt_date_long,"SAT_CLOCK_TIME",  // probably wrong
+  fprintf(fprsc,rscfmt_int,"SAT_TIME_CODE",0); 					// no idea here!
+  fprintf(fprsc,rscfmt_date_long,"SAT_CLOCK_TIME",  				// probably wrong
           s_ymd.year,s_ymd.month,s_ymd.day,s_time.hour,s_time.min,sec,msec);
-  fprintf(fprsc,rscfmt_int,"SAT_CLOCK_STEP",0); // no idea here!
+  fprintf(fprsc,rscfmt_int,"SAT_CLOCK_STEP",0); 				// no idea here!
   fprintf(fprsc,rscfmt_str,"PROCESSING_FACILITY","ASF");
   fprintf(fprsc,rscfmt_str,"PROCESSING_SYSTEM",TOOL_SUITE_NAME);
   fprintf(fprsc,rscfmt_str,"PROCESSING_VERSION",TOOL_SUITE_VERSION_STRING);
   fprintf(fprsc,rscfmt_str,"PLATFORM","SEASAT");
-  fprintf(fprsc,rscfmt_int,"ORBIT_NUMBER",100); // need to figure this out
-  fprintf(fprsc,rscfmt_float,"ONE_WAY_DELAY",33.8e-6); // maybe divide by 2 here?
+  fprintf(fprsc,rscfmt_int,"ORBIT_NUMBER",100); 				// need to figure this out
+  fprintf(fprsc,rscfmt_float,"ONE_WAY_DELAY",33.8e-6); 				// maybe divide by 2 here?
   fprintf(fprsc,rscfmt_float,"STARTING_RANGE",srf);
-  fprintf(fprsc,rscfmt_float,"RANGE_PIXEL_SIZE",0.); // need to figure this out
+  fprintf(fprsc,rscfmt_float,"RANGE_PIXEL_SIZE",0.); 				// need to figure this out
   fprintf(fprsc,rscfmt_float,"PRF",(double)prf);
-  fprintf(fprsc,rscfmt_int,"ANTENNA_SIDE",-1); // not sure what this is
-  fprintf(fprsc,rscfmt_int,"ANTENNA_LENGTH",10); // need to figure this out
+  fprintf(fprsc,rscfmt_int,"ANTENNA_SIDE",-1); 					// not sure what this is
+  fprintf(fprsc,rscfmt_int,"ANTENNA_LENGTH",10); 				// need to figure this out
   fprintf(fprsc,rscfmt_int,"FILE_LENGTH",nl);
   fprintf(fprsc,rscfmt_int,"XMIN",0);
   fprintf(fprsc,rscfmt_int,"XMAX",13679);
@@ -926,8 +927,8 @@ int main(int argc, char *argv[])
   fprintf(fprsc,rscfmt_int,"YMIN",0);
   fprintf(fprsc,rscfmt_int,"YMAX",nl-1);
   fprintf(fprsc,rscfmt_int,"RANGE_SAMPLING_FREQUENCY",22765000);
-  fprintf(fprsc,rscfmt_float,"PLANET_GM",3.98600448073E+14); // gravitational constant times planet mass
-  fprintf(fprsc,rscfmt_float,"PLANET_SPINRATE",7.29211573052E-05); // not sure what this is
+  fprintf(fprsc,rscfmt_float,"PLANET_GM",3.98600448073E+14); 			// gravitational constant times planet mass
+  fprintf(fprsc,rscfmt_float,"PLANET_SPINRATE",7.29211573052E-05); 		// not sure what this is
   fprintf(fprsc,rscfmt_float,"FIRST_LINE_UTC",start_sec);
   fprintf(fprsc,rscfmt_float,"CENTER_LINE_UTC",.5*(start_sec + end_sec));
   fprintf(fprsc,rscfmt_float,"LAST_LINE_UTC",end_sec);

@@ -154,7 +154,7 @@ main(int argc, char *argv[])
    
   asfSplashScreen(argc, argv); 
 
-  if (argc<2 || argc>6) { give_usage(argc,argv); exit(1); }
+  if (argc<2 || argc>9) { give_usage(argc,argv); exit(1); }
 
   while ((cla=getopt(argc,argv,"mvcE:r:")) != -1)
     switch(cla) {

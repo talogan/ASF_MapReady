@@ -130,7 +130,7 @@ void spectra(FILE *fp,int sl, int nl,double iqmean,int *ocnt,double *ocal)
   printf("Mean is %lf\n",mean);
   printf("Standard Deviation is %lf\n",stddev);
   printf("Values that are more than %f standard deviations from the mean (loc,val,%%):\n",DEVS);
-  printf("\tBin\tPower\tCaltone\n");
+//   printf("\tBin\tPower\tCaltone\n");
 
   /* find out where all of the notch filters need to be */
   int notch_cnt = 0;
@@ -139,7 +139,7 @@ void spectra(FILE *fp,int sl, int nl,double iqmean,int *ocnt,double *ocal)
        notch_loc[notch_cnt] = k;
        notch_val[notch_cnt] = (k-(double)(FFT_LEN/2))/(double)FFT_LEN;
        notch_pow[notch_cnt] = shift[k];
-       printf("\t%i\t%lf\t%lf\n",notch_loc[notch_cnt],notch_pow[notch_cnt],notch_val[notch_cnt]);
+//       printf("\t%i\t%lf\t%lf\n",notch_loc[notch_cnt],notch_pow[notch_cnt],notch_val[notch_cnt]);
        notch_cnt++;
     }
   }
@@ -187,7 +187,7 @@ void spectra(FILE *fp,int sl, int nl,double iqmean,int *ocnt,double *ocal)
     if (notch_val[k]==0) break;
   }
   
-  printf("After culling neighbors, only %i caltones remain:\n",k);
+  printf("After culling neighbors, only %i caltones remain\n",k);
   for (i=0; i<k; i++) printf("\t%i\t%lf\t%.14lf\n",notch_loc[i],notch_pow[i],notch_val[i]);
   
   if (k > MAX_CALTONES) {
