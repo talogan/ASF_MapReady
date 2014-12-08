@@ -1,7 +1,7 @@
 /******************************************************************************
-NAME:  ksat_ingest -  Convert raw CEOS file into processed CEOS frames
+NAME:  cdpf_ingest -  Convert raw CEOS file into processed CEOS frames
 
-SYNOPSIS:  ksat_ingest <base_file_name>
+SYNOPSIS:  cdpf_ingest <base_file_name>
 
 DESCRIPTION:  Turns a CEOS raw swath into CEOS amp frames
 
@@ -183,8 +183,8 @@ main(int argc, char *argv[])
    { 
 
      printf("Creating frame #%i with center at %lf\n",i,ers_frame[i]);
-     sprintf(filename,"R1_%.5i_FN1_F%.3i",meta->general->orbit,i);
-     sprintf(cmd,"focus rd %s.raw %s.ldr %s.gli %s.gli.par -center_option LAT -center %lf -duration_option DIS -duration 50 -pro SGF", raw_file, raw_file, filename, filename, ers_frame[i]);
+     sprintf(filename,"R1_%.5i_ST5_F%.3i",meta->general->orbit,i);
+     sprintf(cmd,"focus rd %s.raw %s.ldr %s.gli %s.gli.par -center_option LAT -center %lf -duration_option DIS -duration 100 -pro SGF", raw_file, raw_file, filename, filename, ers_frame[i]);
      printf("Running command: %s\n",cmd);
      err = system(cmd);
     if (err!=0) {printf("WARNING: last command returned %i\n",err);}

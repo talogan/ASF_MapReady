@@ -1,38 +1,33 @@
 /******************************************************************************
-NAME:  ksat_ingest -  Convert raw CEOS file into processed CEOS frames
+NAME: check_geolocation - check a CEOS file's geolocation for consistency 
+			  with the file name's frame numnber
 
-SYNOPSIS:  ksat_ingest <base_file_name>
+SYNOPSIS:  check_geolocation <base_file_name>
 
-DESCRIPTION:  Turns a CEOS raw swath into CEOS amp frames
+DESCRIPTION:  Make sure that a file that says it is frame X is actually 
+	      geolocated at location X.
+
 
 EXTERNAL ASSOCIATES:
     NAME:               USAGE:
     ---------------------------------------------------------------
-    focus rd		Used to process the raw SAR into images
-    foucs cc		Used to convert files into CEOS format
-    asf_import		Convert CEOS file into internal format
 
 FILE REFERENCES:
     NAME:               USAGE:
     ---------------------------------------------------------------
-    rd_full		this is the name of the full swath
 
 PROGRAM HISTORY:
     VERS:   DATE:    AUTHOR:      PURPOSE:
     ---------------------------------------------------------------
-    1.0	    10/14    T. Logan     ingest KSAT files into ASF CEOS format
+    1.0	    11/14    T. Logan     check image geolocations
     
 HARDWARE/SOFTWARE LIMITATIONS:
 
 ALGORITHM DESCRIPTION:
 
-	- Process the entire swath into rd_full image
-	- Ingest the rd_full image into internal ASF format
-	- Read the rd_full metadata file
-	- Calculate the start and end frames to process from this swath
-	- For each frame
-		call focus rd
-		call focus cc
+	Ingest the input file into internal format
+	Calculate the latitude at scene center
+	Compare the scene center latitude the expected frame latitude
 
 ALGORITHM REFERENCES:
 
@@ -127,6 +122,7 @@ main(int argc, char *argv[])
   double time;
   char ASC;
   int  first_frame, last_frame;
+  int  frame, tmp;
   int  i, err;
   float minl, maxl;
   double mid_lat, mid_lon;
@@ -134,84 +130,21 @@ main(int argc, char *argv[])
 
 
   if (argc != 2) { give_usage(argc,argv); exit(1); }
+  strcpy(filename,argv[1]);
 
-  strcpy(raw_file,argv[1]);
-
-  if (access("rd_full.img",F_OK) == -1) {  /* create rd_full file if it doesn't exist */
-    sprintf(cmd,"focus rd %s.raw %s.ldr rd_full.gli rd_full.gli.par -pro SGF",raw_file, raw_file);
-    err = system(cmd);
-    if (err!=0) {printf("ERROR: last command returned %i; exiting\n",err); exit(1);}
-
-    sprintf(cmd,"focus cc -i rd_full.gli -p rd_full.gli.par -his %s.raw.his -pro SGF -dat rd_full.dat -lea rd_full.ldr -tra rd_full.tra -vol rd_full.vol -nul rd_full.null -log rd_full.log", raw_file);
-    err = system(cmd);
-    if (err!=0) {printf("ERROR: last command returned %i; exiting\n",err); exit(1);}
-
-    sprintf(cmd,"asf_import rd_full rd_full");
-    err = system(cmd);
-    if (err!=0) {printf("ERROR: last command returned %i; exiting\n",err); exit(1);}
-  }
- 
-  meta = meta_read("rd_full");
-  printf("Read metadata file\n");
-
-  get_min_max_lat(meta, &min_lat, &max_lat);
-  printf("\nminimum lat: %lf\n",min_lat);
-  printf("maximum lat: %lf\n",max_lat);
-
-  time = meta_get_time(meta,meta->general->line_count/2,meta->general->sample_count/2);
-  stateVector vec = meta_get_stVec(meta,time);
-  if (vec.vel.z >= 0) ASC = 'A';
-  else ASC = 'D';
-
-  printf("This pass is "); if (ASC=='D') printf("descending\n"); else printf("ascending\n");
-
-  minl = (float) min_lat+0.175; /* add 1/2 a frame */
-  maxl = (float) max_lat-0.175; /* subtract 1/2 a frame */
-  first_frame = asf_frame_calc("RSAT",minl,ASC);
-  last_frame = asf_frame_calc("RSAT",maxl,ASC);
-
-  if (first_frame > last_frame) {
-    int tmp = first_frame;
-    first_frame = last_frame;
-    last_frame = tmp;
-  }
-
-  printf("First frame is %i\n",first_frame);
-  printf("Last frame is %i\n",last_frame);
-
-  for (i=first_frame; i<=last_frame; i++)
-   { 
-
-     printf("Creating frame #%i with center at %lf\n",i,ers_frame[i]);
-     sprintf(filename,"R1_%.5i_FN1_F%.3i",meta->general->orbit,i);
-     sprintf(cmd,"focus rd %s.raw %s.ldr %s.gli %s.gli.par -center_option LAT -center %lf -duration_option DIS -duration 50 -pro SGF", raw_file, raw_file, filename, filename, ers_frame[i]);
-     printf("Running command: %s\n",cmd);
-     err = system(cmd);
-    if (err!=0) {printf("WARNING: last command returned %i\n",err);}
-     sprintf(cmd,"focus cc -i %s.gli -p %s.gli.par -his %s.raw.his -pro SGF -dat %s.D -lea %s.L -tra %s.tra -vol %s.vol -nul %s.nul -log %s.log", filename,filename,raw_file,filename,filename,filename,filename,filename,filename);
-     printf("Running command: %s\n",cmd);
-     err = system(cmd);
-    if (err!=0) {printf("WARNING: last command returned %i\n",err);}
-   }
-
-  /* Check the last frame to make sure the geolocations are correct */
-  sprintf(cmd,"asf_import %s.D %s",filename,filename); err = system(cmd);
+  /* Check the frame to make sure the geolocations are correct */
+  sprintf(cmd,"asf_import %s.D %s > import.out",filename,filename); err = system(cmd);
   if (err!=0) {printf("WARNING: last command returned %i, exiting\n",err); exit(1); }
   meta = meta_read(filename);
-  printf("Read last metadata file\n");
+  /* printf("Read metadata file\n"); */
   meta_get_latLon(meta,meta->general->line_count/2,meta->general->sample_count/2,0,&mid_lat,&mid_lon);
+
+  sscanf(filename,"R1_%5i_FN1_F%3i",&tmp,&frame);
   
-  if ( fabs(ers_frame[last_frame]-mid_lat) > EPSILON)  {
+  if ( fabs(ers_frame[frame]-mid_lat) > EPSILON)  {
     char tmpname[256];
-    printf("WARNING: Last frame geolocation suspect!!!\n");
-    printf("WARNING: ERS_FRAME = %lf, Actual = %lf\n",ers_frame[last_frame],mid_lat);
-    printf("WARNING: Deleting last frame that was created\n");
-    sprintf(tmpname,"%s.D",filename); remove(tmpname);
-    sprintf(tmpname,"%s.L",filename); remove(tmpname);
-    sprintf(tmpname,"%s.tra",filename); remove(tmpname);
-    sprintf(tmpname,"%s.vol",filename); remove(tmpname);
-    sprintf(tmpname,"%s.nul",filename); remove(tmpname);
-  }
+    printf("%s: WARNING: ERS_FRAME = %lf, Actual = %lf\n",filename,ers_frame[frame],mid_lat);
+  } else { printf("%s: All is well\n",filename); }
 
   exit(0);
 
