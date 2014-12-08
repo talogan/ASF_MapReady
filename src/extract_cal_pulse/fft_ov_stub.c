@@ -6,7 +6,7 @@
 
 #define LEN 16
 #define M_PI 3.14159265359
-double *fft_oversamp(double *in, int len, int exp_factor);
+double *fft_oversamp(double *in, int len, int exp_factor, double *ret);
 
 main (int argc, char *argv[])
 {
@@ -15,7 +15,7 @@ main (int argc, char *argv[])
    int i, k;
    FILE *fpout; 
    
-   double *ret;
+   double ret[8*LEN];
    double z;
    
    for (i=0; i< LEN; i++)
@@ -32,40 +32,36 @@ main (int argc, char *argv[])
    fclose(fpout);
 
    printf("CALLING OVERSAMP 1\n");
-   ret = fft_oversamp(x,LEN,1);
+   fft_oversamp(x,LEN,1,ret);
    fpout = fopen("a1.new","w");
     for (k=0; k<LEN; k++) {
        fprintf(fpout,"%i %lf\n",k,ret[k]);
     }
    fclose(fpout);
-   free(ret);
    
    printf("CALLING OVERSAMP 2\n");
-   ret = fft_oversamp(x,LEN,2);
+   fft_oversamp(x,LEN,2,ret);
    fpout = fopen("a2.new","w");
    for (k=0; k<LEN*2; k++) {
        fprintf(fpout,"%i %lf\n",k,ret[k]);
     }
    fclose(fpout);
-   free(ret);
       
    printf("CALLING OVERSAMP 4\n");
-   ret = fft_oversamp(x,LEN,4);
+   fft_oversamp(x,LEN,4,ret);
    fpout = fopen("a4.new","w");
     for (k=0; k<LEN*4; k++) {
        fprintf(fpout,"%i %lf\n",k,ret[k]);
     }
    fclose(fpout);
-   free(ret);
    
    printf("CALLING OVERSAMP 8\n");
-   ret = fft_oversamp(x,LEN,8);
+   fft_oversamp(x,LEN,8,ret);
    fpout = fopen("a8.new","w");
     for (k=0; k<LEN*8; k++) {
        fprintf(fpout,"%i %lf\n",k,ret[k]);
     }
    fclose(fpout);
-   free(ret);
 }
 
    

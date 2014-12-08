@@ -50,7 +50,7 @@ void match_pulse(double *fbuf,double *ovpulse,double *fbuf2)
     for (j=0; j<EXPANSION_FACTOR*8; j++) {
       diff[j] = 0.0;
       for (i=0; i<SAMPLES_PER_LINE-10; i++) {
-        diff[j] += fbuf[i] - ovpulse[i*EXPANSION_FACTOR+j];
+        diff[j] += fabs(fbuf[i]-ovpulse[i*EXPANSION_FACTOR+j]);
       }
 //      printf("MIN DIFF = %lf\n",min_diff);
       
@@ -65,7 +65,7 @@ void match_pulse(double *fbuf,double *ovpulse,double *fbuf2)
 //	printf("J = %i:  Diff is %lf\n",j,diff[j]);
 //    }
     
-//    printf("Best fit is at an offset of %i (%lf)\n",best,min_diff);
+    printf("Best fit is at an offset of %i (%lf)\n",best,min_diff);
     
     if (first==1) fpout = fopen("downsampled_chirp.txt","w");
     for (i=0; i<SAMPLES_PER_LINE; i++) {

@@ -92,17 +92,26 @@ typedef struct {
    float imag;
 } complexFloat;
 
-int get_values(FILE *fp,SEASAT_header_ext *s);
-void write_values(FILE *fp,SEASAT_header_ext *s);
-void spectra(FILE *fp,int sl, int nl,double iqmean,int *ocnt,double *ocal);
-double *fft_oversamp(double *in, int len, int exp_factor, double *out);
-void match_pulse(double *fbuf,double *ovpulse,double *fbuf2);
-
 #define SAMPLES_PER_LINE   13680	/* decoded samples per output line */
 #define EXPANSION_FACTOR   4
 #define O_SAMP_PER_LINE	   (SAMPLES_PER_LINE*EXPANSION_FACTOR)
 #define FFT_LEN            16384
 #define O_SAMP_PER_FFT     (FFT_LEN*EXPANSION_FACTOR)
+#define MAX_DWPS	   1000
+#define SAVE_PULSES	   1		/* set to zero to turn off */
+
+int get_values(FILE *fp,SEASAT_header_ext *s);
+void spectra(FILE *fp,int sl, int nl,double iqmean,int *ocnt,double *ocal);
+double *fft_oversamp(double *in, int len, int exp_factor, double *out);
+void match_pulse(double *fbuf,double *ovpulse,double *fbuf2);
+int fix_dwps(int dwp_positions[],double pulse[][O_SAMP_PER_LINE],int ndwps);
+void baseband(double *tbuf, double *total, double ovpulse[][O_SAMP_PER_LINE], int ndwps);
+
+int PULSE_LENGTH=4000;          /* number of lines to sum to create the pulses */
+complexFloat *b;
+fftwf_plan   b_longb, b_longf;
+double tbuf[O_SAMP_PER_LINE], fbuf[SAMPLES_PER_LINE], fbuf2[SAMPLES_PER_LINE];
+double total[O_SAMP_PER_LINE];
 
 main (int argc, char *argv[])
 {
@@ -115,27 +124,23 @@ main (int argc, char *argv[])
   FILE *fpout_dat, *fpout_hdr;
   FILE *fptmp;
   unsigned char buf[SAMPLES_PER_LINE];
-  double tbuf[O_SAMP_PER_LINE], fbuf[SAMPLES_PER_LINE], fbuf2[SAMPLES_PER_LINE];
-  double total[O_SAMP_PER_LINE];
   
-  int    dwp_positions[256];
+  int    dwp_positions[MAX_DWPS];
   double ave;
   int    ndwps;
-  double ovpulse[10][O_SAMP_PER_LINE];
+  double ovpulse[MAX_DWPS][O_SAMP_PER_LINE];
 
-  complexFloat *b;
-  fftwf_plan   b_longb, b_longf;
   double op[O_SAMP_PER_LINE];
   
   char indat[256], inhdr[256];
   char outdat[256], outhdr[256], outdis[256];
   char tmp[256];
 
-  int ocnt, this_line;
+  int ocnt;
   double ocal[20];
   char intmp[256];
 
-  if (argc != 3) {
+  if (argc != 3 && argc != 4) {
      printf("Usage: %s <in> <out>\n",argv[0]);
      printf("\tin         - input data and header file base name\n");
      printf("\tout        - output data and header file base name\n\n");
@@ -147,13 +152,19 @@ main (int argc, char *argv[])
   strcpy(outdat,argv[2]); strcat(outdat,".dat");
   strcpy(outhdr,argv[2]); strcat(outhdr,".hdr");
 
+  if (argc == 4) PULSE_LENGTH=atoi(argv[3]);
+  printf("Using pulses of length %i\n",PULSE_LENGTH);
+
   hdr = (SEASAT_header_ext *) malloc(sizeof(SEASAT_header_ext));
 
-  printf("\t%s: opening input files...\n",argv[0]);
+  printf("%s: opening input files...\n",argv[0]);
   fpin_dat = fopen(indat,"rb");
   if (fpin_dat == NULL) {printf("ERROR: Unable to open input data file %s\n",indat); exit(1);}  
   fpin_hdr = fopen(inhdr,"r");
   if (fpin_hdr == NULL) {printf("ERROR: Unable to open input header file %s\n",inhdr); exit(1);}  
+  printf("%s: opening output file\n",argv[0]);
+  fpout_dat = fopen(outdat,"wb");
+  if (fpout_dat == NULL) {printf("ERROR: Unable to open output data file %s\n",outdat); exit(1);}  
 
   b = (complexFloat *) fftwf_malloc(sizeof(fftwf_complex)*O_SAMP_PER_FFT);
   b_longb = fftwf_plan_dft_1d(O_SAMP_PER_FFT, (fftwf_complex *) b, (fftwf_complex *)b, FFTW_BACKWARD, FFTW_MEASURE);
@@ -163,172 +174,90 @@ main (int argc, char *argv[])
 
   /* Start reading the input file header - get the first DWP */
   val=get_values(fpin_hdr,hdr);
-  if (val!=20) {printf("ERROR: unable to read from header file\n"); exit(1);}
+  if (val!=20) { printf("ERROR: unable to read from header file\n"); exit(1);}
   last_dwp = hdr->delay;
   printf("\tfound initial dwp of %i\n",last_dwp);
 
   this_dwp = last_dwp;
   curr_line = 0;
   ndwps = 0;
-  dwp_positions[ndwps++] = 0;
-  printf("Set dwp position %i to %i\n",ndwps-1,dwp_positions[ndwps-1]);
+  dwp_positions[ndwps] = 0;
+  printf("Set dwp position %i to %i\n",ndwps,dwp_positions[ndwps]);
+  ndwps++;
   
   last_start = 1;
-
   printf("\treading file; creating oversampled average\n");
   double sum = 0.0;
 
   /* Loop through the entire file creating averaged calibration pulses */
   while (val == 20) {
-      this_line = 0;
+  
       /* read, oversample, and sum lines until DWP shift is found in the hdr file */
       while (this_dwp == last_dwp) {
         fread(buf,SAMPLES_PER_LINE,1,fpin_dat);
-	if (this_line < 10000) {
-          for (i=0; i<SAMPLES_PER_LINE; i++) fbuf[i] = (double) buf[i];
-	  fft_oversamp(fbuf,SAMPLES_PER_LINE,EXPANSION_FACTOR,op);
-          for (i=0; i<O_SAMP_PER_LINE; i++) /* if (op[i]>=4.0 && op[i]<28.0) */ { tbuf[i] += op[i]; total[i]++; }
-	  this_line++;
-   	  if ((int)this_line%100==0) printf("\toversampling line %i\n",curr_line);
-	}
+        for (i=0; i<SAMPLES_PER_LINE; i++) fbuf[i] = (double) buf[i];
+        fft_oversamp(fbuf,SAMPLES_PER_LINE,EXPANSION_FACTOR,op);
+        for (i=0; i<O_SAMP_PER_LINE; i++) /* if (op[i]>=4.0 && op[i]<28.0) */ { tbuf[i] += op[i]; total[i]++; }
 	
+   	if ((int)curr_line%PULSE_LENGTH==0 && curr_line != 0) {
+          printf("\tread to line %i.  DWP is %i. ",curr_line,this_dwp);
+          dwp_positions[ndwps] = curr_line;
+          printf("Set dwp position %i to %i\n",ndwps,dwp_positions[ndwps]);
+          baseband(tbuf,total,ovpulse,ndwps);
+
+          /* write the pulses to file as we go */
+	  sprintf(tmp,"pulse%.6i.txt",dwp_positions[ndwps]);
+	  fptmp = fopen(tmp,"w");
+          for (i=0; i<O_SAMP_PER_LINE; i++) { 
+	    fprintf(fptmp,"%lf\n",ovpulse[ndwps][i]);
+  	  }
+	  fclose(fptmp);
+	  ndwps++;
+        }
+
         curr_line++;
         val=get_values(fpin_hdr,hdr);
         if (val!=20) break;
         this_dwp = hdr->delay;
-	if (curr_line%1000==1) printf("\tskipping line %i\n",curr_line);
       }
 
       /* check if we found a new DWP or hit end of file */
       if (this_dwp != last_dwp) {
         printf("\tread to line %i.  New DWP is %i\n",curr_line,this_dwp);
-        dwp_positions[ndwps++] = curr_line;
-        printf("Set dwp position %i to %i\n",ndwps-1,dwp_positions[ndwps-1]);
+        dwp_positions[ndwps] = curr_line;
+        printf("Set dwp position %i to %i\n",ndwps,dwp_positions[ndwps]);
       } else if (val!=20) {
         printf("\tread to end of file\n");
 	dwp_positions[ndwps] = curr_line;
         printf("Set dwp position %i to %i\n",ndwps,dwp_positions[ndwps]);
       }
 
-      /* average the summed up pulse */
-      sum = 0.0; 
-      for (i=0; i<O_SAMP_PER_LINE; i++) { 
-          if (total[i] != 0) tbuf[i] = tbuf[i]/total[i]; 
-	  else tbuf[i] = 0.0;
-          sum += tbuf[i];
-        }
-      sum = sum / (double) O_SAMP_PER_LINE;
-
-      /* write the averaged normalized pulse to output file */
-      sprintf(tmp,"%s%.7i.ov.pulse",argv[1],last_start); 
-      fptmp = fopen(tmp,"w");
-      if (fptmp == NULL) {printf("ERROR: Unable to open output data file %s\n",tmp); exit(1);}  
-      for (i=0; i<O_SAMP_PER_LINE; i++) { 
-          fprintf(fptmp,"%lf\n",(tbuf[i]-sum));
-	  ovpulse[ndwps-1][i] = tbuf[i]-sum;  /* save averaged pulses as we go */
-      }
-      fclose(fptmp);
-
-      /* calculate the spectra - just for fun (?) */
-      spectra(fpin_dat,dwp_positions[(ndwps-1)],10002,ave,&ocnt,ocal);
-      sprintf(intmp,"%s%.7i.spectra.out",argv[1],dwp_positions[(ndwps-1)]); 
-      rename("spectra.out",intmp);
-      sprintf(intmp,"%s%.7i.spectra.fixed",argv[1],dwp_positions[(ndwps-1)]); 
-      rename("spectra.fixed",intmp);
-
-      /* Since the spectra ALWAYS shows a peak at 0.25, we remove that here */
-      for (k=0; k<O_SAMP_PER_LINE; k++) { b[k].real = tbuf[k]; b[k].imag = 0.0; }
-      for (k=O_SAMP_PER_LINE; k<O_SAMP_PER_FFT; k++) { b[k].real = 0.0; b[k].imag = 0.0; }
-      fftwf_execute(b_longf);
-
-      fptmp = fopen("b.freq","w");
-      for (k=0; k<O_SAMP_PER_LINE; k++) {
-         tbuf[k] = sqrt(b[k].real*b[k].real+b[k].imag*b[k].imag)/(double)O_SAMP_PER_LINE;
-         fprintf(fptmp,"%i %lf\n",k,tbuf[k]);
-      }
-      fclose(fptmp);
-
-//      printf("Removing freq at location %i (value %lf)\n",O_SAMP_PER_FFT/4,
-//                sqrt(b[O_SAMP_PER_FFT/4].real*b[O_SAMP_PER_FFT/4].real+
-//		     b[O_SAMP_PER_FFT/4].imag*b[O_SAMP_PER_FFT/4].imag)/(double)O_SAMP_PER_FFT);
-//      b[O_SAMP_PER_FFT/4].real = 0.0;
-//      b[O_SAMP_PER_FFT/4].imag = 0.0;
-
-//      printf("Removing freq at location %i (value %lf)\n",3*O_SAMP_PER_FFT/4,
-//     		sqrt(b[3*O_SAMP_PER_FFT/4].real*b[3*O_SAMP_PER_FFT/4].real+
-//		     b[3*O_SAMP_PER_FFT/4].imag*b[3*O_SAMP_PER_FFT/4].imag)/(double)O_SAMP_PER_FFT);
-//      b[3*O_SAMP_PER_FFT/4].real = 0.0;
-//      b[3*O_SAMP_PER_FFT/4].imag = 0.0;
-  
-      printf("Removing freq at location 4095 - 4097\n");
- 
-//      b[4093].real = 0.0;
-//      b[4093].imag = 0.0;
-//      b[4094].real = 0.0;
-//      b[4094].imag = 0.0;
-      b[4095].real = 0.0;
-      b[4095].imag = 0.0;
-      b[4096].real = 0.0;
-      b[4096].imag = 0.0;
-      b[4097].real = 0.0;
-      b[4097].imag = 0.0;
-//      b[4098].real = 0.0;
-//      b[4098].imag = 0.0;
-//      b[4099].real = 0.0;
-//      b[4099].imag = 0.0;
-
-      printf("Removing freq at location 1365\n");
-
-      b[1365].real = 0.0;
-      b[1365].imag = 0.0;
-
-      fptmp = fopen("b.freq2","w");
-      for (k=0; k<O_SAMP_PER_LINE; k++) {
-         tbuf[k] = sqrt(b[k].real*b[k].real+b[k].imag*b[k].imag)/(double)O_SAMP_PER_LINE;
-         fprintf(fptmp,"%i %lf\n",k,tbuf[k]);
-      }
-      fclose(fptmp);
-    
-      fftwf_execute(b_longb);
-    
-      /* average the summed up pulse */
-      sum = 0.0;
-      for (k=0; k<O_SAMP_PER_LINE; k++) 
-        { 
-          tbuf[k] = sqrt(b[k].real*b[k].real+b[k].imag*b[k].imag)/(double)O_SAMP_PER_LINE;
-          sum += tbuf[k];
-        }
-      sum = sum / (double) O_SAMP_PER_LINE;
-      fptmp = fopen("b.time2","w");
-      for (k=0; k<O_SAMP_PER_LINE; k++) {
-         tbuf[k] -= sum;
-         fprintf(fptmp,"%i %lf\n",k,tbuf[k]);
-         ovpulse[ndwps-1][k] = tbuf[k];  /* save averaged pulses as we go */
-      }
-      fclose(fptmp);
-
+      baseband(tbuf,total,ovpulse,ndwps);
+      ndwps++;
       last_dwp = this_dwp;
       last_start = curr_line;
   }
-  
-  printf("\n");
-  fclose(fpin_dat);
-  fclose(fpin_hdr);
-  fpin_dat = fopen(indat,"rb");
-  if (fpin_dat == NULL) {printf("ERROR: Unable to open input data file %s\n",indat); exit(1);}  
-  
-  printf("Opening output file\n");
-  fpout_dat = fopen(outdat,"wb");
-  if (fpout_dat == NULL) {printf("ERROR: Unable to open output data file %s\n",outdat); exit(1);}  
 
-  printf("Number of DWPs is %i\n",ndwps);
+  printf("\n");
+  fclose(fpin_hdr);
+  
+  printf("Calling fix_dwp with ndwps = %i\n",ndwps);
+  ndwps = fix_dwps(dwp_positions,ovpulse,ndwps);
+  printf("Returned from fix_dwps with ndwps = %i\n",ndwps);
+
+  /* calculate the spectra - just for fun (?) */
+//  spectra(fpin_dat,dwp_positions[(ndwps-1)],10002,ave,&ocnt,ocal);
+//  sprintf(intmp,"%s%.7i.spectra.out",argv[1],dwp_positions[(ndwps-1)]); 
+//  rename("spectra.out",intmp);
+//  sprintf(intmp,"%s%.7i.spectra.fixed",argv[1],dwp_positions[(ndwps-1)]); 
+//  rename("spectra.fixed",intmp);
+
+  fseek(fpin_dat,0,SEEK_SET);
 
   /* Now that we have the pulses, apply them to the data file */
   sum = 0.0; curr_line =0;
-  for (k=0; k<ndwps; k++) {
-
+  for (k=0; k<ndwps-1; k++) {
     printf("%i : trying range of %i to %i\n",k,dwp_positions[k],dwp_positions[k+1]);
-	
     for (j=dwp_positions[k]; j<dwp_positions[k+1]; j++) {
       fread(buf,SAMPLES_PER_LINE,1,fpin_dat);
       sum =0.0; 
@@ -346,6 +275,7 @@ main (int argc, char *argv[])
   system(tmp);
   printf("Done correcting file, wrote %i lines of output\n\n",curr_line);
   fclose(fpout_dat);
+  fclose(fpin_dat);
   exit(0);
 }
 
@@ -362,15 +292,166 @@ int get_values(FILE *fp,SEASAT_header_ext *s) {
   return(val);
 }
 
-void write_values(FILE *fp,SEASAT_header_ext *s) {
-  if (s==NULL) {printf("empty pointer passed to write values\n"); exit(1);}
-  if (fp==NULL) {printf("null file pointer passed to write values\n"); exit(1);}
-  fprintf(fp,"%i %li %i %i %i %i %i %i %i %i %i %i %i %i %i %i %i %i %i %i\n",
-    s->major_cnt,s->major_sync_loc,s->station_code,s->lsd_year,
-    s->day_of_year,s->msec,s->clock_drift,s->no_scan_indicator_bit,
-    s->bits_per_sample,s->mfr_lock_bit,s->prf_rate_code,s->delay,
-    s->scu_bit,s->sdf_bit,s->adc_bit,s->time_gate_bit,s->local_prf_bit,
-    s->auto_prf_bit,s->prf_lock_bit,s->local_delay_bit);
-}
+void baseband(double *tbuf, double *total, double ovpulse[][O_SAMP_PER_LINE], int ndwps) 
+{
+    int i;
+    double sum;
+    
+    /* average the summed up pulse */
+    sum = 0.0; 
+    for (i=0; i<O_SAMP_PER_LINE; i++) { 
+      if (total[i] != 0) tbuf[i] = tbuf[i]/total[i]; 
+      else tbuf[i] = 0.0;
+      sum += tbuf[i];
+    }
+    sum = sum / (double) O_SAMP_PER_LINE;
 
+    /* save the basebanded pulse */
+    for (i=0; i<O_SAMP_PER_LINE; i++) { 
+      ovpulse[ndwps][i] = tbuf[i]-sum;
+      tbuf[i] = 0.0;
+      total[i] = 0.0;
+    }
+}
 	
+/* need to deal with the actual DWP changes AND remove the high frequency sinusoid */
+int fix_dwps(int dwp_positions[],double pulse[][O_SAMP_PER_LINE],int ndwps)
+{
+  int i,j,k;
+  
+  int ldwps[MAX_DWPS];
+  double lpulse[MAX_DWPS][O_SAMP_PER_LINE];
+  int cnt;
+  int first_time;
+  FILE *fptmp;
+  double sum = 0.0;
+  char tmp[256];
+  
+  /* zero out the local values */
+  cnt = 0;
+  for (i=0; i<MAX_DWPS; i++) {
+    ldwps[i] = 0;
+    for (j=0; j< O_SAMP_PER_LINE; j++) lpulse[i][j] = 0;
+  }
+  
+  /* copy in the first pulse */
+  ldwps[cnt] = dwp_positions[0];
+  for (j=0; j<O_SAMP_PER_LINE; j++) lpulse[cnt][j] = pulse[1][j];
+  cnt++;
+  first_time = 1;
+  
+  /* loop through all pulses */
+  for (i=1; i< ndwps; i++)  {
+
+    /* if this pulse covers less than a PULSE_LENGTH discard 
+       first time, use the last one; 2nd time use the next one */
+    if (dwp_positions[i]-dwp_positions[i-1]<PULSE_LENGTH) {
+
+      printf("Fixing values at %i\n",dwp_positions[i]);
+      
+      ldwps[cnt] = dwp_positions[i];
+   
+      if (first_time == 1) {
+        for (j=0; j<O_SAMP_PER_LINE; j++) lpulse[cnt][j] = pulse[i-1][j];
+	first_time=0;
+      } else {
+        for (j=0; j<O_SAMP_PER_LINE; j++) lpulse[cnt][j] = pulse[i+1][j];
+        first_time=1;
+      }
+      cnt++;
+    } else {
+      ldwps[cnt] = dwp_positions[i];
+      for (j=0; j<O_SAMP_PER_LINE; j++) lpulse[cnt][j] = pulse[i][j];
+      cnt++;
+    }
+  }
+  
+  /* copy into return variables */  
+  for (i=0; i<cnt; i++) {
+    dwp_positions[i] = ldwps[i];
+    for (j=0; j<O_SAMP_PER_LINE; j++) pulse[i][j]=lpulse[i][j];
+  }
+  for (; i<MAX_DWPS; i++) {
+    dwp_positions[i] = 0;
+    for (j=0; j<O_SAMP_PER_LINE; j++) pulse[i][j]=0;
+  }
+  
+  for (i=0; i<cnt; i++) {
+
+      /* Now, loop through all pulses and remove the high frequency sinusoid */
+      for (k=0; k<O_SAMP_PER_LINE; k++) { b[k].real = pulse[i][k]+16.0; b[k].imag = 0.0; }
+      for (k=O_SAMP_PER_LINE; k<O_SAMP_PER_FFT; k++) { b[k].real = 0.0; b[k].imag = 0.0; }
+      
+      fftwf_execute(b_longf);
+
+      sprintf(tmp,"pulse%.6i.freq1",dwp_positions[i]);
+      fptmp = fopen(tmp,"w");
+      printf("%i:writing freq1 file %s\n",dwp_positions[i],tmp);
+      for (k=0; k<O_SAMP_PER_LINE; k++) {
+         tbuf[k] = sqrt(b[k].real*b[k].real+b[k].imag*b[k].imag)/(double)O_SAMP_PER_LINE;
+         fprintf(fptmp,"%i %lf\n",k,tbuf[k]);
+      }
+      fclose(fptmp);
+
+      double mean = 0.0, diff=0.0, sqdiff=0.0, sumsq = 0.0, stddev;
+      double DEVS = 2.0;
+      int notch_count = 0;
+
+      /* get the mean and standard deviation of the spectra */
+      for (k=0; k<FFT_LEN; k++) mean = mean + sqrt(b[k].real*b[k].real+b[k].imag*b[k].imag); 
+      mean = mean / FFT_LEN;
+      for (k=0; k<FFT_LEN; k++) {
+        diff = sqrt(b[k].real*b[k].real+b[k].imag*b[k].imag)-mean;	        /* deviation from mean */
+        sqdiff = diff*diff;	/* square of deviation from mean */
+        sumsq = sumsq + sqdiff;	/* sum of squared deviations */
+      }
+      stddev = sqrt(sumsq/(FFT_LEN-1));
+
+      printf("Mean is %lf\n",mean);
+      printf("Standard Deviation is %lf\n",stddev);
+
+      /* find out where all of the notch filters need to be */
+      int notch_cnt = 0;
+//      for (k=0; k<FFT_LEN; k++) {
+//        if ((sqrt(b[k].real*b[k].real+b[k].imag*b[k].imag)-mean)> DEVS*stddev) {
+//           b[k].real = mean;
+//           b[k].imag = mean;
+//           notch_cnt++;
+//        }
+//      }      
+      printf("Notched out %i values\n\n",notch_cnt);
+      
+      sprintf(tmp,"pulse%.6i.freq2",dwp_positions[i]);
+      fptmp = fopen(tmp,"w");
+      printf("%i:writing freq2 file %s\n",dwp_positions[i],tmp);
+      for (k=0; k<O_SAMP_PER_LINE; k++) {
+         tbuf[k] = sqrt(b[k].real*b[k].real+b[k].imag*b[k].imag)/(double)O_SAMP_PER_LINE;
+         fprintf(fptmp,"%i %lf\n",k,tbuf[k]);
+      }
+      fclose(fptmp);
+    
+      fftwf_execute(b_longb);
+    
+      /* average the summed up pulse */
+      sum = 0.0;
+      for (k=0; k<O_SAMP_PER_LINE; k++) 
+        { 
+          tbuf[k] = sqrt(b[k].real*b[k].real+b[k].imag*b[k].imag)/(double)O_SAMP_PER_LINE;
+          sum += tbuf[k];
+        }
+      sum = sum / (double) O_SAMP_PER_LINE;
+      
+      sprintf(tmp,"pulse%.6i.time2",dwp_positions[i]);
+      fptmp = fopen(tmp,"w");
+      printf("%i:writing time2 file %s\n",dwp_positions[i],tmp);
+      for (k=0; k<O_SAMP_PER_LINE; k++) {
+         tbuf[k] -= sum;
+         fprintf(fptmp,"%i %lf\n",k,tbuf[k]);
+         pulse[i][k] = tbuf[k];  /* save averaged pulses as we go */
+      }
+      fclose(fptmp);
+
+   }
+
+   return(cnt);
+}

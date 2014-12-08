@@ -62,6 +62,7 @@ BUGS:
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <unistd.h>
 
 typedef struct {
         int       major_cnt;
@@ -92,7 +93,6 @@ typedef struct {
 } complexFloat;
 
 #define SAMPLES_PER_LINE   13680	/* decoded samples per output line */
-#define PULSE_LENGTH       1000         /* number of lines to sum to create the pulses */
 #define MAX_DWPS	   10000
 
 int get_values(FILE *fp,SEASAT_header_ext *s);
@@ -102,6 +102,8 @@ void match_pulse(double *fbuf,double *ovpulse,double *fbuf2);
 void filter(unsigned char buf[], unsigned char obuf[]);
 void create_smoothed_dat(FILE *fpin_dat,char *filename);
 int fix_dwps(int dwp_positions[],double pulse[][SAMPLES_PER_LINE],int ndwps);
+
+int PULSE_LENGTH=400;          /* number of lines to sum to create the pulses */
 
 main (int argc, char *argv[])
 {
@@ -116,7 +118,7 @@ main (int argc, char *argv[])
   int last_start;
   SEASAT_header_ext *hdr;
   FILE *fpin_dat, *fpin_hdr;
-  FILE *fpout_dat, *fpout_hdr;
+  FILE *fpout_dat;
   FILE *fptmp;
   unsigned char buf[SAMPLES_PER_LINE];
   unsigned char obuf[SAMPLES_PER_LINE];
@@ -132,14 +134,15 @@ main (int argc, char *argv[])
   int ocnt;
   double ocal[20];
   char intmp[256];
-  double max[256000];
-  int loc[256000];
+  double max[1000000];
+  int loc[1000000];
   
 
-  if (argc != 3) {
-     printf("Usage: %s <in> <out>\n",argv[0]);
+  if (argc != 3 && argc != 4) {
+     printf("Usage: %s <in> <out> [window]\n",argv[0]);
      printf("\tin         - input data and header file base name\n");
-     printf("\tout        - output data and header file base name\n\n");
+     printf("\tout        - output data and header file base name\n");
+     printf("\twindow     - length of summation window for pulses (default 400)\n\n");
      exit(1);
   }
 
@@ -148,6 +151,9 @@ main (int argc, char *argv[])
   strcpy(outdat,argv[2]); strcat(outdat,".dat");
   strcpy(outhdr,argv[2]); strcat(outhdr,".hdr");
 
+  if (argc == 4) PULSE_LENGTH=atoi(argv[3]);
+  printf("Using pulses of length %i\n",PULSE_LENGTH);
+  
   hdr = (SEASAT_header_ext *) malloc(sizeof(SEASAT_header_ext));
 
   printf("\t%s: opening input files...\n",argv[0]);
@@ -156,14 +162,14 @@ main (int argc, char *argv[])
   fpin_hdr = fopen(inhdr,"r");
   if (fpin_hdr == NULL) {printf("ERROR2: Unable to open input header file %s\n",inhdr); exit(1);}  
 
-//  printf("Creating smoothed dat file called test.smooth\n");
-//  create_smoothed_dat(fpin_dat,"test.smooth");
-//  FILE *fpin_smooth = fopen("test.smooth","r");
-//  if (fpin_smooth == NULL) {printf("ERROR3: Unable to open input file test.smooth\n"); exit(1);}  
+  strcpy(intmp,argv[1]); strcat(intmp,".smooth");
+  printf("Creating smoothed dat file called %s\n",intmp);
+  create_smoothed_dat(fpin_dat,intmp);
+  FILE *fpin_smooth = fopen(intmp,"r");
+  if (fpin_smooth == NULL) {printf("ERROR3: Unable to open input file test.smooth\n"); exit(1);}  
 
-  for (i=0; i<SAMPLES_PER_LINE; i++) tbuf[i] = 0.0; 
-  for (i=0; i<SAMPLES_PER_LINE; i++) total[i] = 0.0; 
-  for (i=0; i<256000; i++) max[i] = 0.0;
+  for (i=0; i<SAMPLES_PER_LINE; i++) { tbuf[i] = 0.0; total[i] = 0.0; }
+  for (i=0; i<256000; i++) { max[i] = 0.0; loc[i] = 0; }
     
   /* Start reading the input file header - get the first DWP */
   val=get_values(fpin_hdr,hdr);
@@ -184,28 +190,21 @@ main (int argc, char *argv[])
   /* Loop through the entire file creating averaged calibration pulses */
   while (val == 20) {
 
-      /* read, oversample, and sum lines until DWP shift is found in the hdr file */
+      /* read and sum lines until DWP shift is found in the hdr file */
       while (this_dwp == last_dwp) {
         fread(buf,SAMPLES_PER_LINE,1,fpin_dat);
-        // fread(ubuf,SAMPLES_PER_LINE,1,fpin_smooth);
-	// filter(ubuf,obuf);
+        fread(ubuf,SAMPLES_PER_LINE,1,fpin_smooth);
+	filter(ubuf,obuf);
 
-        for (i=0; i<SAMPLES_PER_LINE; i++) 
-	  {
-	     tbuf[i] += (double) buf[i];
-             total[i]++;
-	   /*
-	     if ((double)obuf[i]>max[curr_line]) 
-	       { 
-		 max[curr_line] = (double) obuf[i];
-		 loc[curr_line] = i;
-	       }
-	    */
-	  }
+        for (i=0; i<SAMPLES_PER_LINE; i++) {
+	  tbuf[i] += (double) buf[i]; total[i]++;
+	  if ((double)obuf[i]>max[curr_line]) { max[curr_line] = (double) obuf[i]; loc[curr_line] = i; }
+	}
+	
    	if ((int)curr_line%PULSE_LENGTH==0 && curr_line != 0) {
-          printf("\tread to line %i.  DWP is %i\n",curr_line,this_dwp);
+          printf("\tread to line %i.  DWP is %i",curr_line,this_dwp);
           dwp_positions[ndwps] = curr_line;
-          printf("\t\tSet dwp position %i to %i\n",ndwps,dwp_positions[ndwps]);
+          printf("\tSet dwp position %i to %i\n",ndwps,dwp_positions[ndwps]);
 	  
           /* average the summed up pulse */
           double sum = 0.0;
@@ -263,35 +262,11 @@ main (int argc, char *argv[])
       
       ndwps++;
 
-      /* write the averaged pulse to output file
-      sprintf(tmp,"%s%.7i.pulse",argv[1],last_start); 
-      fptmp = fopen(tmp,"w");
-      if (fptmp == NULL) {printf("ERROR5: Unable to open output data file %s\n",tmp); exit(1);}  
-      for (i=0; i<SAMPLES_PER_LINE; i++) { 
-          fprintf(fptmp,"%lf\n",tbuf[i]-sum);
-          pulse[ndwps-1][i] = tbuf[i]-sum;  
-          tbuf[i] = 0.0;
-	  total[i] = 0.0;
-      }
-      fclose(fptmp);
-      */
-      
-      /* write the normalized pulse to output file
-      sprintf(tmp,"%s%.7i.norm.pulse",argv[1],last_start); 
-      fptmp = fopen(tmp,"w");
-      if (fptmp == NULL) {printf("ERROR6: Unable to open output data file %s\n",tmp); exit(1);}  
-      double zzz = -100000.0;
-      for (i=0; i<SAMPLES_PER_LINE; i++) { if (fabs(pulse[ndwps-1][i])>zzz) zzz = fabs(pulse[ndwps-1][i]); }
-      for (i=0; i<SAMPLES_PER_LINE; i++) { fprintf(fptmp,"%lf\n",pulse[ndwps-1][i]/zzz);
-      }
-      fclose(fptmp);
-      */
-
       last_dwp = this_dwp;
       last_start = curr_line;
   }
   
-  /* write the maximums to file 
+  /* write the maximums to file */
   sprintf(tmp,"%s%.7i.max",argv[1],last_start); 
   fptmp = fopen(tmp,"w");
   if (fptmp == NULL) {printf("ERROR7: Unable to open output data file %s\n",tmp); exit(1);}  
@@ -299,7 +274,6 @@ main (int argc, char *argv[])
      fprintf(fptmp,"%i %lf\n",loc[i],max[i]);
   }
   fclose(fptmp);
-  */
   
   printf("Calling fix_dwps with ndwps = %i\n",ndwps);
   ndwps = fix_dwps(dwp_positions,pulse,ndwps);
@@ -317,7 +291,6 @@ main (int argc, char *argv[])
 
   printf("\n");
   fclose(fpin_hdr);
-
   fseek(fpin_dat,0,SEEK_SET);
 
   printf("Opening output file\n");
@@ -327,7 +300,7 @@ main (int argc, char *argv[])
   printf("Number of DWPs is %i\n",ndwps);
 
   /* Now that we have the pulses, apply them to the data file */
-  for (k=0; k<ndwps; k++) {
+  for (k=0; k<ndwps-1; k++) {
     printf("%i : trying range of %i to %i\n",k,dwp_positions[k],dwp_positions[k+1]);
     for (j=dwp_positions[k]; j<dwp_positions[k+1]; j++) {
       fread(buf,SAMPLES_PER_LINE,1,fpin_dat);
@@ -335,11 +308,10 @@ main (int argc, char *argv[])
          fbuf[i] = (double) buf[i];
 
 // Restict code
-	 if (i>6380 && i<7940) fbuf2[i] = fbuf[i] - pulse[k][i];
-	 else                  fbuf2[i] = fbuf[i];
+//	 if (i>6380 && i<7940) fbuf2[i] = fbuf[i] - pulse[k+1][i];
+//	 else                  fbuf2[i] = fbuf[i];
 	 
-	 
-	 fbuf2[i] = fbuf[i] - pulse[k][i];
+	 fbuf2[i] = fbuf[i] - pulse[k+1][i];
 	 buf[i] = (int) fbuf2[i]; 
       }
       fwrite(buf,SAMPLES_PER_LINE,1,fpout_dat); 
@@ -351,9 +323,7 @@ main (int argc, char *argv[])
   system(tmp);
 
   printf("Done correcting file, wrote %lf lines of output\n\n",tot);
-  
   fclose(fpout_dat);
-//  fclose(fpout_hdr);
 
   exit(0);
 }
@@ -425,41 +395,49 @@ void create_smoothed_dat(FILE *fpin_dat,char *filename)
   FILE *fpout;
   
   curr_line = 0;
-  fpout = fopen(filename,"wb");
 
-  /* write out first lines */
-  for (i=0;i<KERNEL/2; i++) {
-    cnt = fread(buf,1,SAMPLES_PER_LINE, fpin_dat);
-    fwrite(buf,1,SAMPLES_PER_LINE, fpout);
-    curr_line++;
+  if( access( filename, F_OK ) != -1 ) {
+    // file exists
+    printf("Smoothed file already exists\n");
+
+  } else {
+    // file doesn't exist
+    fpout = fopen(filename,"wb");
+
+    /* write out first lines */
+    for (i=0;i<KERNEL/2; i++) {
+      cnt = fread(buf,1,SAMPLES_PER_LINE, fpin_dat);
+      fwrite(buf,1,SAMPLES_PER_LINE, fpout);
+      curr_line++;
+    }
+  
+    while (cnt == SAMPLES_PER_LINE) {
+      for (j=0;j<SAMPLES_PER_LINE; j++) sum[j] = 0;
+      for (line = curr_line-KERNEL/2; line < curr_line+KERNEL/2+1; line++)
+        {
+          long int where = (long int) (line*SAMPLES_PER_LINE);
+          fseek(fpin_dat,where,SEEK_SET);
+  	  cnt = fread(buf,1,SAMPLES_PER_LINE, fpin_dat);
+          for (j=0;j<SAMPLES_PER_LINE; j++) sum[j] += (int) buf[j];
+        }
+      for (j=0;j<SAMPLES_PER_LINE; j++) obuf[j] = (unsigned int) (sum[j]/KERNEL);
+      fwrite(obuf,1,SAMPLES_PER_LINE, fpout);
+      curr_line++;
+    }
+  
+    /* dump out last lines */
+    for (i=KERNEL/2+1; i<KERNEL; i++) {
+      long int where = (long int) (curr_line*SAMPLES_PER_LINE);
+      fseek(fpin_dat,where,SEEK_SET);
+      cnt = fread(buf,1,SAMPLES_PER_LINE, fpin_dat);
+      fwrite(buf,1,SAMPLES_PER_LINE, fpout);
+      curr_line++;
+    }
+  
+    fseek(fpin_dat,0,SEEK_SET);
+    fclose(fpout);
   }
-  
-  while (cnt == SAMPLES_PER_LINE) {
-    for (j=0;j<SAMPLES_PER_LINE; j++) sum[j] = 0;
-    for (line = curr_line-KERNEL/2; line < curr_line+KERNEL/2+1; line++)
-      {
-        long int where = (long int) (line*SAMPLES_PER_LINE);
-        fseek(fpin_dat,where,SEEK_SET);
-	cnt = fread(buf,1,SAMPLES_PER_LINE, fpin_dat);
-        for (j=0;j<SAMPLES_PER_LINE; j++) sum[j] += (int) buf[j];
-      }
-    for (j=0;j<SAMPLES_PER_LINE; j++) obuf[j] = (unsigned int) (sum[j]/KERNEL);
-    fwrite(obuf,1,SAMPLES_PER_LINE, fpout);
-    curr_line++;
-  }
-  
-  /* dump out last lines */
-  for (i=KERNEL/2+1; i<KERNEL; i++) {
-    long int where = (long int) (curr_line*SAMPLES_PER_LINE);
-    fseek(fpin_dat,where,SEEK_SET);
-    cnt = fread(buf,1,SAMPLES_PER_LINE, fpin_dat);
-    fwrite(buf,1,SAMPLES_PER_LINE, fpout);
-    curr_line++;
-  }
-  
-  fseek(fpin_dat,0,SEEK_SET);
-  fclose(fpout);
-  
+
 }
 
 int fix_dwps(int dwp_positions[],double pulse[][SAMPLES_PER_LINE],int ndwps)
